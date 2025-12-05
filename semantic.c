@@ -5695,6 +5695,7 @@ static void ParseLine(SemanticState* const state, const StringView* const label,
 }
 
 #define DIRECTIVE_OR_MACRO_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789?_.@"
+#define DIRECTIVE_OR_MACRO_CHARS_NO_DOT "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789?_@"
 #define LABEL_CHARS DIRECTIVE_OR_MACRO_CHARS
 
 /* TODO: When I switch to C++, make this the first thing to go... */
@@ -5927,7 +5928,8 @@ static void InvokeMacro(SemanticState* const state, Macro* const macro, const St
 
 	state->suppress_listing = cc_true;
 
-	source_line_pointer += strspn(source_line_pointer, DIRECTIVE_OR_MACRO_CHARS);
+	/* Skip past the macro name, but stop at '.' so we can extract the size specifier. */
+	source_line_pointer += strspn(source_line_pointer, DIRECTIVE_OR_MACRO_CHARS_NO_DOT);
 
 	if (!StringView_Empty(label))
 	{
@@ -6241,8 +6243,23 @@ static void AssembleLine(SemanticState *state, const String *source_line_raw, co
 
 	/* This is either a directive, or a macro. */
 	{
+		/* For macro lookup, we need to strip any size suffix (.b, .w, .l, .s) from the directive name.
+		   This allows macros to be invoked with size specifiers, e.g., "MyMacro.w arg1,arg2". */
+		StringView directive_for_lookup;
+		size_t directive_for_lookup_length = directive_length;
+
+		/* Check if directive ends with a size suffix (.b, .w, .l, or .s) */
+		if (directive_length >= 2 && source_line_pointer[directive_for_lookup_length - 2] == '.')
+		{
+			const char size_char = source_line_pointer[directive_for_lookup_length - 1] | 0x20; /* Convert to lowercase */
+			if (size_char == 'b' || size_char == 'w' || size_char == 'l' || size_char == 's')
+				directive_for_lookup_length -= 2;
+		}
+
+		StringView_SubStr(&directive_for_lookup, &directive_and_operands, 0, directive_for_lookup_length);
+
 		/* Look up the directive in the dictionary to see if it's actually a macro. */
-		const Dictionary_Entry* const macro_dictionary_entry = LookupSymbol(state, &directive, NULL);
+		const Dictionary_Entry* const macro_dictionary_entry = LookupSymbol(state, &directive_for_lookup, NULL);
 		Macro* const macro = macro_dictionary_entry != NULL && macro_dictionary_entry->type == SYMBOL_MACRO ? (Macro*)macro_dictionary_entry->shared.pointer : NULL;
 
 		if (macro != NULL && macro->is_short)
