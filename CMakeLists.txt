@@ -128,3 +128,15 @@ set_tests_properties(z80_sonic1_compare PROPERTIES DEPENDS z80_sonic1_assemble)
 add_test(NAME z80_westone_assemble COMMAND clownassembler -c -p -i "TEST.ASM" -o "${CMAKE_CURRENT_BINARY_DIR}/z80-westone.bin" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests/ASM68K-Z80-extension/Westone")
 add_test(NAME z80_westone_compare COMMAND clownassembler_hash "${CMAKE_CURRENT_BINARY_DIR}/z80-westone.bin" "ee34bb568b2590632d4837fbe1531f06")
 set_tests_properties(z80_westone_compare PROPERTIES DEPENDS z80_westone_assemble)
+
+if(EMSCRIPTEN)
+    add_library(clownassembler_wasm
+        wasm.c
+        frontend_custom.c
+    )
+
+    target_link_libraries(clownassembler_wasm
+        clownassembler_core
+    )
+endif()
+
