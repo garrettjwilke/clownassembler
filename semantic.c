@@ -6006,6 +6006,33 @@ static void InvokeMacro(SemanticState* const state, Macro* const macro, const St
 					}
 				}
 
+				/* If commas appear inside strings, then we shouldn't separate on them. */
+				/* This is because of the possibility of code such as '"A: Play, B: Stop"' being passed as an argument. */
+				/* To do this, manually skip characters until we find a closing quote. */
+				if (character == '"' || character == '\'')
+				{
+					const char quotation_character = character;
+					char previous_character = '\0';
+
+					while (character != ';' && character != '\0')
+					{
+						character = *source_line_pointer++;
+
+						/* Handle escaped quotes (paired quotes like "" or ''). */
+						if (character == quotation_character && previous_character == quotation_character)
+						{
+							previous_character = '\0';
+							continue;
+						}
+
+						/* If we find the matching closing quote, break out of the string. */
+						if (character == quotation_character)
+							break;
+
+						previous_character = character;
+					}
+				}
+
 				/* If we encounter a comma, a comment, or the end of the line, then split this off as a macro argument. */
 				if (character == ',' || character == ';' || character == '\0')
 				{
