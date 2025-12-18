@@ -5945,10 +5945,57 @@ static void InvokeMacro(SemanticState* const state, Macro* const macro, const St
 		/* Skip the '.' character. */
 		++source_line_pointer;
 
-		StringView_Create(&closure.size, source_line_pointer, strspn(source_line_pointer, DIRECTIVE_OR_MACRO_CHARS));
-
-		/* Advance past the size specifier. */
-		source_line_pointer += StringView_Length(&closure.size);
+		/* Check if this is a valid size specifier (.b, .w, .l, or .s) */
+		const size_t size_specifier_length = strspn(source_line_pointer, DIRECTIVE_OR_MACRO_CHARS);
+		if (size_specifier_length == 1)
+		{
+			const char size_char = source_line_pointer[0] | 0x20; /* Convert to lowercase */
+			if (size_char == 'b' || size_char == 'w' || size_char == 'l' || size_char == 's')
+			{
+				/* This is a valid size specifier. */
+				StringView_Create(&closure.size, source_line_pointer, 1);
+				source_line_pointer += 1;
+			}
+			else
+			{
+				/* Not a size specifier - store the identifier in closure.size so it can be accessed via \0.
+				   This handles cases like "Console.WriteLine" where "WriteLine" should be accessible as \0. */
+				const char *identifier_start = source_line_pointer;
+				const size_t identifier_length = strspn(identifier_start, DIRECTIVE_OR_MACRO_CHARS);
+				const char *after_identifier = identifier_start + identifier_length;
+				
+				/* Store the identifier in closure.size. */
+				if (identifier_length > 0)
+				{
+					StringView_Create(&closure.size, identifier_start, identifier_length);
+					source_line_pointer = after_identifier;
+				}
+				else
+				{
+					StringView_CreateBlank(&closure.size);
+				}
+			}
+		}
+		else
+		{
+			/* Not a size specifier (size specifiers are only 1 character) - store the identifier in closure.size so it can be accessed via \0.
+			   This handles cases like "Console.WriteLine" where "WriteLine" should be accessible as \0. */
+			const char *identifier_start = source_line_pointer;
+			const size_t identifier_length = strspn(identifier_start, DIRECTIVE_OR_MACRO_CHARS);
+			const char *after_identifier = identifier_start + identifier_length;
+			
+			/* Store the identifier in closure.size. */
+			if (identifier_length > 0)
+			{
+				StringView_Create(&closure.size, identifier_start, identifier_length);
+				/* Skip whitespace after the identifier so argument extraction can start from the next argument. */
+				source_line_pointer = after_identifier + strspn(after_identifier, " \t");
+			}
+			else
+			{
+				StringView_CreateBlank(&closure.size);
+			}
+		}
 	}
 	else
 	{
@@ -6274,6 +6321,7 @@ static void AssembleLine(SemanticState *state, const String *source_line_raw, co
 		   This allows macros to be invoked with size specifiers, e.g., "MyMacro.w arg1,arg2". */
 		StringView directive_for_lookup;
 		size_t directive_for_lookup_length = directive_length;
+		const char *original_source_line_pointer = source_line_pointer;
 
 		/* Check if directive ends with a size suffix (.b, .w, .l, or .s) */
 		if (directive_length >= 2 && source_line_pointer[directive_for_lookup_length - 2] == '.')
@@ -6286,8 +6334,38 @@ static void AssembleLine(SemanticState *state, const String *source_line_raw, co
 		StringView_SubStr(&directive_for_lookup, &directive_and_operands, 0, directive_for_lookup_length);
 
 		/* Look up the directive in the dictionary to see if it's actually a macro. */
-		const Dictionary_Entry* const macro_dictionary_entry = LookupSymbol(state, &directive_for_lookup, NULL);
-		Macro* const macro = macro_dictionary_entry != NULL && macro_dictionary_entry->type == SYMBOL_MACRO ? (Macro*)macro_dictionary_entry->shared.pointer : NULL;
+		Dictionary_Entry* macro_dictionary_entry = LookupSymbol(state, &directive_for_lookup, NULL);
+		Macro* macro = macro_dictionary_entry != NULL && macro_dictionary_entry->type == SYMBOL_MACRO ? (Macro*)macro_dictionary_entry->shared.pointer : NULL;
+
+		/* If the directive wasn't found as a macro and it contains a dot (that's not a size suffix),
+		   try looking up the part before the dot as a macro. This handles cases like "Console.WriteLine"
+		   where "Console" is the macro and ".WriteLine" should be the first argument. */
+		if (macro == NULL)
+		{
+			const char *dot_position = memchr(source_line_pointer, '.', directive_length);
+			if (dot_position != NULL && dot_position != source_line_pointer + directive_length - 2)
+			{
+				/* Found a dot that's not part of a size suffix. Try the part before the dot. */
+				const size_t prefix_length = dot_position - source_line_pointer;
+				StringView prefix_directive;
+				StringView_SubStr(&prefix_directive, &directive_and_operands, 0, prefix_length);
+
+				macro_dictionary_entry = LookupSymbol(state, &prefix_directive, NULL);
+				macro = macro_dictionary_entry != NULL && macro_dictionary_entry->type == SYMBOL_MACRO ? (Macro*)macro_dictionary_entry->shared.pointer : NULL;
+
+				if (macro != NULL)
+				{
+					/* We found the macro. The dot and everything after it should be treated as arguments.
+					   We need to adjust source_line_pointer so that when InvokeMacro skips the macro name,
+					   it will stop at the dot. Since InvokeMacro uses DIRECTIVE_OR_MACRO_CHARS_NO_DOT which
+					   doesn't include dots, it will naturally stop at the dot. So we just need to make sure
+					   source_line_pointer points to the start of the macro name (which it already does).
+					   The directive_length adjustment is just for consistency. */
+					directive_length = prefix_length;
+					StringView_SubStr(&directive_for_lookup, &directive_and_operands, 0, prefix_length);
+				}
+			}
+		}
 
 		if (macro != NULL && macro->is_short)
 		{
